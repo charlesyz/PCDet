@@ -71,19 +71,13 @@ class BaseCadcDataset(DatasetTemplate):
         return plane
         """
         raise NotImplementedError
-    
-    def cls_type_to_id(self, cls_type):
-        type_to_id = {'Car': 1, 'Pedestrian': 2, 'Cyclist': 3, 'Truck': 4}
-        if cls_type not in type_to_id.keys():
-            return -1
-        return type_to_id[cls_type]
 
     def get_annotation_from_label(self, calib, sample_idx):
         date, set_num, idx = sample_idx
         obj_list = self.get_label(sample_idx)[int(idx)]['cuboids']
         
         annotations = {}
-        annotations['name'] = np.array([self.cls_type_to_id(obj['label']) for obj in obj_list])
+        annotations['name'] = np.array([obj['label'] for obj in obj_list])
         annotations['num_points_in_gt'] = [[obj['points_count'] for obj in obj_list]]
         
         loc_lidar = np.array([[obj['position']['x'],obj['position']['y'],obj['position']['z']] for obj in obj_list]) 
@@ -294,16 +288,28 @@ class BaseCadcDataset(DatasetTemplate):
             single_anno['sample_idx'] = np.array([sample_idx] * num_example, dtype=np.int64)
             annos.append(single_anno)
             if save_to_file:
-                cur_det_file = os.path.join(output_dir, '%s.txt' % sample_idx)
+                cur_det_file = os.path.join(output_dir, '%s_%s_%s.json' % (sample_idx[0],sample_idx[1],sample_idx[2]))
+                boxes_lidar = single_anno['boxes_lidar'] # x y z w l h yaw
+                pred_json = {}
+                pred_json['cuboids'] = []
+                for idx in range(len(bbox)):
+                    data['cuboids'].append({
+                        'label': single_anno['name'][idx],
+                        'position': {
+                            'x': boxes_lidar[idx][0],
+                            'y': boxes_lidar[idx][1],
+                            'z': boxes_lidar[idx][2],
+                        },
+                        'dimension': {
+                            'x': boxes_lidar[idx][3],
+                            'y': boxes_lidar[idx][4],
+                            'z': boxes_lidar[idx][5],
+                        },
+                        "yaw": boxes_lidar[idx][6],
+                        "score": single_anno['score'][idx]
+                    })
                 with open(cur_det_file, 'w') as f:
-                    boxes_lidar = single_anno['boxes_lidar'] # x y z w l h yaw
-
-                    for idx in range(len(bbox)):
-                        print('%s %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f'
-                              % (single_anno['name'][idx], boxes_lidar[idx][0], boxes_lidar[idx][1], boxes_lidar[idx][2],
-                                 boxes_lidar[idx][3], boxes_lidar[idx][4],boxes_lidar[idx][5],boxes_lidar[idx][6], 
-                                 single_anno['score'][idx]),
-                              file=f)
+                    json.dump(pred_json, f)
 
         return annos
 
@@ -317,6 +323,7 @@ class BaseCadcDataset(DatasetTemplate):
         eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.cadc_infos]
         # Perform AP eval here
         
+        return "", {}
         raise NotImplementedError
         
 
@@ -420,7 +427,7 @@ class CadcDataset(BaseCadcDataset):
 
         if 'annos' in info:
             annos = info['annos']
-            annos = common_utils.drop_info_with_name(annos, name='DontCare')
+            #annos = common_utils.drop_info_with_name(annos, name='DontCare')
             loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
             gt_names = annos['name']
             bbox = annos['bbox']

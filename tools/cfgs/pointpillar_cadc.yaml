@@ -1,14 +1,14 @@
-CLASS_NAMES: ['Car', 'Pedestrian', 'Cyclist']
+CLASS_NAMES: ['Car', 'Pedestrian']
 
 DATA_CONFIG:
     DATASET: 'CadcDataset'
     DATA_DIR: 'data/cadcd'
-    FOV_POINTS_ONLY: True
+    FOV_POINTS_ONLY: False
     NUM_POINT_FEATURES: {
         'total': 4,
         'use': 4
     }
-    POINT_CLOUD_RANGE: [0, -39.68, -3, 69.12, 39.68, 1]
+    POINT_CLOUD_RANGE: [-39.68, -39.68, -3, 69.12, 39.68, 1]
     MASK_POINTS_BY_RANGE: True
 
     TRAIN:
@@ -41,10 +41,10 @@ DATA_CONFIG:
             ]
             PREPARE:
                 filter_by_difficulty: [-1]
-                filter_by_min_points: ['Car:5', 'Pedestrian:5', 'Cyclist:5']
+                filter_by_min_points: ['Car:5', 'Pedestrian:5']
             RATE: 1.0
-            SAMPLE_GROUPS: ['Car:15','Pedestrian:10', 'Cyclist:10']
-            USE_ROAD_PLANE: True
+            SAMPLE_GROUPS: ['Car:15','Pedestrian:10']
+            USE_ROAD_PLANE: False
 
     VOXEL_GENERATOR:
         MAX_POINTS_PER_VOXEL: 32 
@@ -96,24 +96,18 @@ MODEL:
                 SAMPLE_SIZE: 512
 
                 ANCHOR_GENERATOR: [
-                    {'anchor_range': [0, -40.0, -1.78, 70.4, 40.0, -1.78],
+                    {'anchor_range': [-40.0, -40.0, -1.78, 70.4, 40.0, -1.78],
                      'sizes': [[1.6, 3.9, 1.56]],
                      'rotations': [0, 1.57],
                      'matched_threshold': 0.6,
                      'unmatched_threshold': 0.45,
                      'class_name': 'Car'},
-                    {'anchor_range': [0, -40, -0.6, 70.4, 40, -0.6],
+                    {'anchor_range': [-40.0, -40.0, -0.6, 70.4, 40.0, -0.6],
                      'sizes': [[0.6, 0.8, 1.73]],
                      'rotations': [0, 1.57],
                      'matched_threshold': 0.5,
                      'unmatched_threshold': 0.35,
                      'class_name': 'Pedestrian'},
-                    {'anchor_range': [0, -40, -0.6, 70.4, 40, -0.6],
-                     'sizes': [[0.6, 1.76, 1.73]],
-                     'rotations': [0, 1.57],
-                     'matched_threshold': 0.5,
-                     'unmatched_threshold': 0.35,
-                     'class_name': 'Cyclist'},
                 ]
 
     RCNN:
