@@ -167,6 +167,7 @@ def draw_bev(lidar, annotations, predictions, output_path, s1=50,s2=50,f1=50,f2=
     plt.xlim([0, x_max])
     plt.ylim([0, y_max])  
     fig.savefig(output_path, dpi=dpi, bbox_inches='tight', pad_inches=0.0)
+    plt.close('all')
 
 def main():
     if not os.path.exists(OUTPUT_DIR):
@@ -174,7 +175,12 @@ def main():
     
     dataset = BaseCadcDataset(ROOT_PATH)
     results = np.load(RESULT_PATH, allow_pickle=True)
-    for result_frame in results:
+    
+    viz_set = np.append(np.array(range(5)), np.random.randint(low=0, high=len(results), size=20))
+    print(viz_set)
+    
+    for viz_idx in viz_set:
+        result_frame = results[viz_idx]
         if (len(result_frame['sample_idx']) == 0): 
             continue
         sample_idx = result_frame['sample_idx'][0]

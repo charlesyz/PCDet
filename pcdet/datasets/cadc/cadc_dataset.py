@@ -70,6 +70,7 @@ class BaseCadcDataset(DatasetTemplate):
         plane = plane / norm
         return plane
         """
+        # Currently unsupported in CADC
         raise NotImplementedError
 
     def get_annotation_from_label(self, calib, sample_idx):
@@ -91,13 +92,15 @@ class BaseCadcDataset(DatasetTemplate):
         annotations['rotation_y'] = rots
         annotations['dimensions'] = np.array([[obj['dimensions']['y'], obj['dimensions']['z'], obj['dimensions']['x']] for obj in obj_list])  # lhw format
         
-        # Currently unused/unpopulated for CADC.
+        gt_boxes_camera = box_utils.boxes3d_lidar_to_camera(gt_boxes_lidar, calib)
+        
+        # Currently unused for CADC, and don't make too much since as we primarily use 360 degree 3d LIDAR boxes.
         annotations['score'] = np.array([1 for _ in obj_list])
         annotations['difficulty'] = np.array([0 for obj in obj_list], np.int32)
         annotations['truncated'] = np.array([0 for _ in obj_list])
         annotations['occluded'] = np.array([0 for _ in obj_list])
-        annotations['alpha'] = np.array([None for _ in obj_list]) 
-        annotations['bbox'] = np.array([None for _ in obj_list]) 
+        annotations['alpha'] = np.array([-np.arctan2(-gt_boxes_lidar[i][1], gt_boxes_lidar[i][0]) + gt_boxes_camera[i][6] for i in range(len(obj_list))]) 
+        annotations['bbox'] = gt_boxes_camera
         
         num_objects = len([obj['label'] for obj in obj_list if obj['label'] != 'DontCare'])
         num_gt = len(annotations['name'])
@@ -315,16 +318,16 @@ class BaseCadcDataset(DatasetTemplate):
 
     def evaluation(self, det_annos, class_names, **kwargs):
         assert 'annos' in self.cadc_infos[0].keys()
+        import pcdet.datasets.kitti.kitti_object_eval_python.eval as kitti_eval
 
         if 'annos' not in self.cadc_infos[0]:
             return 'None', {}
 
         eval_det_annos = copy.deepcopy(det_annos)
         eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.cadc_infos]
-        # Perform AP eval here
-        
-        return "", {}
-        raise NotImplementedError
+        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(eval_gt_annos, eval_det_annos, class_names)
+
+        return ap_result_str, ap_dict
         
 
 class CadcDataset(BaseCadcDataset):
