@@ -9,52 +9,115 @@ from pathlib import Path
 import torch
 import spconv
 
+from pyquaternion import Quaternion
+from nuscenes.nuscenes import NuScenes
+from nuscenes.utils.splits import create_splits_scenes
+from nuscenes.utils.data_classes import Box
+from nuscenes.eval.detection.config import config_factory
+from nuscenes.eval.detection.evaluate import DetectionEval
+
 from pcdet.utils import box_utils, common_utils
 from pcdet.ops.roiaware_pool3d import roiaware_pool3d_utils
 from pcdet.config import cfg
 from pcdet.datasets.data_augmentation.dbsampler import DataBaseSampler
 from pcdet.datasets import DatasetTemplate
-from pcdet.datasets.cadc import cadc_calibration
+from pcdet.datasets.nuscenes import nuscenes_calibration
 
 
-class BaseCadcDataset(DatasetTemplate):
-    def __init__(self, root_path, split='train'):
+class BaseNuScenesDataset(DatasetTemplate):
+    NameMapping = {
+        'movable_object.barrier': 'Barrier',
+        'vehicle.bicycle': 'Bicycle',
+        'vehicle.bus.bendy': 'Bus',
+        'vehicle.bus.rigid': 'Bus',
+        'vehicle.car': 'Car',
+        'vehicle.construction': 'Construction_vehicle',
+        'vehicle.motorcycle': 'Motorcycle',
+        'human.pedestrian.adult': 'Pedestrian',
+        'human.pedestrian.child': 'Pedestrian',
+        'human.pedestrian.construction_worker': 'Pedestrian',
+        'human.pedestrian.police_officer': 'Pedestrian',
+        'movable_object.trafficcone': 'Traffic_cone',
+        'vehicle.trailer': 'Trailer',
+        'vehicle.truck': 'Truck'
+    }
+    DefaultAttribute = {
+        "car": "vehicle.parked",
+        "pedestrian": "pedestrian.moving",
+        "trailer": "vehicle.parked",
+        "truck": "vehicle.parked",
+        "bus": "vehicle.parked",
+        "motorcycle": "cycle.without_rider",
+        "construction_vehicle": "vehicle.parked",
+        "bicycle": "cycle.without_rider",
+        "barrier": "",
+        "traffic_cone": "",
+    }
+    
+    def __init__(self, root_path, split='train', init_nusc=True):
         super().__init__()
         self.root_path = root_path
         self.split = split
+        if (init_nusc):
+            self.nusc = NuScenes(version='v1.0-trainval', dataroot=root_path, verbose=True)
+            
+        splits = create_splits_scenes()
+        split_scenes = splits[split]
+        all_scene_names = [scene['name'] for scene in self.nusc.scene]
+        split_scene_tokens = [self.nusc.scene[all_scene_names.index(scene_name)]['token'] for scene_name in split_scenes]
+        
+        self.sample_id_list = self.get_sample_tokens_from_scenes(split_scene_tokens)
+        
+    def get_sample_tokens_from_scenes(self, scene_tokens):
+        """
+        :param scene_tokens: List of scene tokens
+        :ret: List of sample tokens
+        """
+        sample_tokens = []
+        for token in scene_tokens:
+            sample_tokens.append(self.nusc.get('scene', token)['first_sample_token'])
+            sample = self.nusc.get('sample', sample_tokens[-1])
+            while (sample['next'] != ''):
+                sample_tokens.append(sample['next'])
+                sample = self.nusc.get('sample', sample_tokens[-1])
 
-        if split in ['train', 'val', 'test']:
-            split_dir = os.path.join(self.root_path, 'ImageSets', split + '.txt')
-
-        self.sample_id_list = [x.strip().split() for x in open(split_dir).readlines()] if os.path.exists(split_dir) else None
+        return sample_tokens
+        
+    
     def set_split(self, split):
-        self.__init__(self.root_path, split)
+        self.__init__(self.root_path, split, False)
 
-    def get_lidar(self, sample_idx):
-        date, set_num, idx = sample_idx
-        lidar_file = os.path.join(self.root_path, date, set_num, 'labeled', 'lidar_points', 'data', '%s.bin' % idx)
+    def get_lidar(self, sample_token):
+        lidar_token = self.nusc.get('sample', sample_token)['data']['LIDAR_TOP']
+        lidar_file = os.path.join(self.root_path, self.nusc.get('sample_data', lidar_token)['filename'])
         assert os.path.exists(lidar_file)
         return np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
 
-    def get_image_shape(self, sample_idx):
-        date, set_num, idx = sample_idx
-        img_file = os.path.join(self.root_path, date, set_num, 'labeled', 'image_00', 'data', '%s.png' % idx)
+    def get_image_shape(self, sample_token):
+        img_token = self.nusc.get('sample', sample_token)['data']['CAM_FRONT']
+        img_file = os.path.join(self.root_path, self.nusc.get('sample_data', img_token)['filename'])
         assert os.path.exists(img_file)
         return np.array(io.imread(img_file).shape[:2], dtype=np.int32)
 
-    def get_label(self, sample_idx):
-        date, set_num, idx = sample_idx
-        label_file = os.path.join(self.root_path, date, set_num, '3d_ann.json')
-        assert os.path.exists(label_file)
-        return json.load(open(label_file, 'r'))
+    def get_label(self, sample_token, sensor='LIDAR_TOP'):
+        sensor_token = self.nusc.get('sample', sample_token)['data'][sensor]
+        data_path, boxes, camera_intrinsic = self.nusc.get_sample_data(sensor_token)
+        return boxes
 
-    def get_calib(self, sample_idx):
-        date, set_num, idx = sample_idx
-        calib_path = os.path.join(self.root_path, date, 'calib')
-        assert os.path.exists(calib_path)
-        return cadc_calibration.Calibration(calib_path)
+    def get_calib(self, sample_token):
+        cam_token = self.nusc.get('sample', sample_token)['data']['CAM_FRONT']
+        lidar_token = self.nusc.get('sample', sample_token)['data']['LIDAR_TOP']
+        cam_calibrated_token = self.nusc.get('sample_data', cam_token)['calibrated_sensor_token']
+        lidar_calibrated_token = self.nusc.get('sample_data', lidar_token)['calibrated_sensor_token']
+        ego_pose_token = self.nusc.get('sample_data', cam_token)['ego_pose_token']
+            
+        cam_calibrated =  self.nusc.get('calibrated_sensor', cam_calibrated_token)
+        lidar_calibrated =  self.nusc.get('calibrated_sensor', lidar_calibrated_token)
+        ego_pose =  self.nusc.get('ego_pose', ego_pose_token)
+        
+        return nuscenes_calibration.Calibration(ego_pose, cam_calibrated, lidar_calibrated)
 
-    def get_road_plane(self, idx):
+    def get_road_plane(self, sample_token):
         """
         plane_file = os.path.join(self.root_path, 'planes', '%s.txt' % idx)
         with open(plane_file, 'r') as f:
@@ -70,36 +133,44 @@ class BaseCadcDataset(DatasetTemplate):
         plane = plane / norm
         return plane
         """
-        # Currently unsupported in CADC
+        # Currently unsupported in NuScenes
         raise NotImplementedError
 
-    def get_annotation_from_label(self, calib, sample_idx):
-        date, set_num, idx = sample_idx
-        obj_list = self.get_label(sample_idx)[int(idx)]['cuboids']
-        
+    def get_annotation_from_label(self, calib, sample_token):
+        box_list = self.get_label(sample_token, sensor='LIDAR_TOP')
+        if (len(box_list) == 0):
+            annotations = {}
+            annotations['name'] = annotations['num_points_in_gt'] = annotations['gt_boxes_lidar'] = \
+                annotations['token'] = annotations['location'] = annotations['rotation_y'] = \
+                annotations['dimensions'] = annotations['score'] = annotations['difficulty'] = \
+                annotations['truncated'] = annotations['occluded'] = annotations['alpha'] = annotations['bbox'] = np.array([])
+            return annotations
+
         annotations = {}
-        annotations['name'] = np.array([obj['label'] for obj in obj_list])
-        annotations['num_points_in_gt'] = [[obj['points_count'] for obj in obj_list]]
+        annotations['name'] = np.array([self.NameMapping[box.name] if box.name in self.NameMapping else 'DontCare' for box in box_list])
+        annotations['num_points_in_gt'] = np.array([self.nusc.get('sample_annotation', box.token)['num_lidar_pts'] for box in box_list])
         
-        loc_lidar = np.array([[obj['position']['x'],obj['position']['y'],obj['position']['z']] for obj in obj_list]) 
-        dims = np.array([[obj['dimensions']['x'],obj['dimensions']['y'],obj['dimensions']['z']] for obj in obj_list])
-        rots = np.array([obj['yaw'] for obj in obj_list])
+        loc_lidar = np.array([box.center for box in box_list]) 
+        dims =  np.array([box.wlh for box in box_list]) 
+        rots = np.array([box.orientation.yaw_pitch_roll[0] for box in box_list])
         gt_boxes_lidar = np.concatenate([loc_lidar, dims, rots[..., np.newaxis]], axis=1)
+            
         annotations['gt_boxes_lidar'] = gt_boxes_lidar
+        annotations['token'] = np.array([box.token for box in box_list])
         
-        # in camera 0 frame. Probably meaningless as most objects aren't in frame.
+        # in CAM_FRONT frame. Probably meaningless as most objects aren't in frame.
         annotations['location'] = calib.lidar_to_rect(loc_lidar) 
         annotations['rotation_y'] = rots
-        annotations['dimensions'] = np.array([[obj['dimensions']['y'], obj['dimensions']['z'], obj['dimensions']['x']] for obj in obj_list])  # lhw format
+        annotations['dimensions'] = np.array([[box.wlh[1], box.wlh[2], box.wlh[0]] for box in box_list])  # lhw format
         
         gt_boxes_camera = box_utils.boxes3d_lidar_to_camera(gt_boxes_lidar, calib)
-        
-        # Currently unused for CADC, and don't make too much since as we primarily use 360 degree 3d LIDAR boxes.
-        annotations['score'] = np.array([1 for _ in obj_list])
-        annotations['difficulty'] = np.array([0 for obj in obj_list], np.int32)
-        annotations['truncated'] = np.array([0 for _ in obj_list])
-        annotations['occluded'] = np.array([0 for _ in obj_list])
-        annotations['alpha'] = np.array([-np.arctan2(-gt_boxes_lidar[i][1], gt_boxes_lidar[i][0]) + gt_boxes_camera[i][6] for i in range(len(obj_list))]) 
+        assert len(gt_boxes_camera) == len(gt_boxes_lidar) == len(box_list)
+        # Currently unused for NuScenes, and don't make too much since as we primarily use 360 degree 3d LIDAR boxes.
+        annotations['score'] = np.array([1 for _ in box_list])
+        annotations['difficulty'] = np.array([0 for _ in box_list], np.int32)
+        annotations['truncated'] = np.array([0 for _ in box_list])
+        annotations['occluded'] = np.array([0 for _ in box_list])
+        annotations['alpha'] = np.array([-np.arctan2(-gt_boxes_lidar[i][1], gt_boxes_lidar[i][0]) + gt_boxes_camera[i][6] for i in range(len(gt_boxes_camera))]) 
         annotations['bbox'] = gt_boxes_camera
         
         return annotations
@@ -123,23 +194,22 @@ class BaseCadcDataset(DatasetTemplate):
     def get_infos(self, num_workers=4, has_label=True, count_inside_pts=True, sample_id_list=None):
         import concurrent.futures as futures
 
-        def process_single_scene(sample_idx):
+        def process_single_scene(sample_token):
             
-            print('%s sample_idx: %s ' % (self.split, sample_idx))
+            print('%s sample_token: %s ' % (self.split, sample_token))
             info = {}
-            pc_info = {'num_features': 4, 'lidar_idx': sample_idx}
+            pc_info = {'num_features': 4, 'lidar_idx': sample_token}
             info['point_cloud'] = pc_info
 
-            image_info = {'image_idx': sample_idx, 'image_shape': self.get_image_shape(sample_idx)}
+            image_info = {'image_idx': sample_token, 'image_shape': self.get_image_shape(sample_token)}
             info['image'] = image_info
-            calib = self.get_calib(sample_idx)
+            calib = self.get_calib(sample_token)
             
-            calib_info = {'T_IMG_CAM0': calib.t_img_cam[0], 'T_CAM_LIDAR': calib.t_cam_lidar[0]}
-
+            calib_info = {'T_IMG_CAM': calib.t_img_cam, 'T_CAR_CAM': calib.t_car_cam, 'T_CAR_LIDAR': calib.t_car_lidar, 'T_GLOBAL_CAR': calib.t_global_car}
             info['calib'] = calib_info
 
             if has_label:
-                annotations = self.get_annotation_from_label(calib, sample_idx)
+                annotations = self.get_annotation_from_label(calib, sample_token)
                 info['annos'] = annotations
             return info
 
@@ -147,11 +217,13 @@ class BaseCadcDataset(DatasetTemplate):
         sample_id_list = sample_id_list if sample_id_list is not None else self.sample_id_list
         with futures.ThreadPoolExecutor(num_workers) as executor:
             infos = executor.map(process_single_scene, sample_id_list)
+        # Remove samples with no gt boxes
+        infos = [sample for sample in infos if sample] 
         return list(infos)
 
     def create_groundtruth_database(self, info_path=None, used_classes=None, split='train'):
         database_save_path = Path(self.root_path) / ('gt_database' if split == 'train' else ('gt_database_%s' % split))
-        db_info_save_path = Path(self.root_path) / ('cadc_dbinfos_%s.pkl' % split)
+        db_info_save_path = Path(self.root_path) / ('nuscenes_dbinfos_%s.pkl' % split)
 
         database_save_path.mkdir(parents=True, exist_ok=True)
         all_db_infos = {}
@@ -169,14 +241,17 @@ class BaseCadcDataset(DatasetTemplate):
             difficulty = annos['difficulty']
             bbox = annos['bbox']
             gt_boxes = annos['gt_boxes_lidar']
-
+            
+            if (len(gt_boxes) == 0):
+                continue
+            
             num_obj = gt_boxes.shape[0]
             point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
                 torch.from_numpy(points[:, 0:3]), torch.from_numpy(gt_boxes)
             ).numpy()  # (nboxes, npoints)
 
             for i in range(num_obj):
-                filename = '%s_%s_%s_%s_%d.bin' % (sample_idx[0], sample_idx[1], sample_idx[2], names[i], i)
+                filename = '%s_%s_%d.bin' % (sample_idx, names[i], i)
                 filepath = database_save_path / filename
                 gt_points = points[point_indices[i] > 0]
 
@@ -283,14 +358,14 @@ class BaseCadcDataset(DatasetTemplate):
             sample_idx = box_dict['sample_idx']
             single_anno, num_example = generate_single_anno(i, box_dict)
             single_anno['num_example'] = num_example
-            single_anno['sample_idx'] = np.array([sample_idx] * num_example, dtype=np.int64)
+            single_anno['sample_idx'] = np.array([sample_idx] * num_example)
             annos.append(single_anno)
             if save_to_file:
-                cur_det_file = os.path.join(output_dir, '%s_%s_%s.json' % (sample_idx[0],sample_idx[1],sample_idx[2]))
+                cur_det_file = os.path.join(output_dir, '%s.json' % (sample_idx))
                 boxes_lidar = single_anno['boxes_lidar'] # x y z w l h yaw
                 pred_json = {}
                 pred_json['cuboids'] = []
-                for idx in range(len(bbox)):
+                for idx in range(len(boxes_lidar)):
                     data['cuboids'].append({
                         'label': single_anno['name'][idx],
                         'position': {
@@ -312,23 +387,82 @@ class BaseCadcDataset(DatasetTemplate):
         return annos
 
     def evaluation(self, det_annos, class_names, **kwargs):
-        assert 'annos' in self.cadc_infos[0].keys()
-        import pcdet.datasets.kitti.kitti_object_eval_python.eval as kitti_eval
-
-        if 'annos' not in self.cadc_infos[0]:
-            return 'None', {}
 
         eval_det_annos = copy.deepcopy(det_annos)
-        eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.cadc_infos]
-        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(eval_gt_annos, eval_det_annos, class_names)
+    
+        # Create NuScenes JSON output file
+        nusc_annos = {}
+        for sample in eval_det_annos:
+            sample_idx = sample['sample_idx'][0]
+            sample_results = []
+            
+            calib = self.get_calib(sample_idx)
+            sample['boxes_lidar'] = np.array(sample['boxes_lidar'])
+            positions_global = calib.lidar_to_global(sample['boxes_lidar'][:,:3])
+            dimensions = sample['boxes_lidar'][:,3:6]
+            rotations = sample['boxes_lidar'][:,6]
+            
+            for translation, dimension, rotation, label, score in zip(positions_global, dimensions, rotations, sample['name'], sample['score']):
+                quaternion = Quaternion(axis=[0, 0, 1], radians=rotation)
+                sample_results.append({
+                    "sample_token": sample_idx,
+                    "translation": translation.tolist(), 
+                    "size": dimension.tolist(),
+                    "rotation": quaternion.elements.tolist(),
+                    "velocity": (0, 0),
+                    "detection_name": label.lower(),
+                    "detection_score": float(score),
+                    "attribute_name": self.DefaultAttribute[label.lower()],
+                })
+                
+            nusc_annos[sample_idx] = sample_results
 
-        return ap_result_str, ap_dict
+        nusc_submission = {
+            "meta": {
+                "use_camera": False,
+                "use_lidar": True,
+                "use_radar": False,
+                "use_map": False,
+                "use_external": False,
+            },
+            "results": nusc_annos,
+        }
+        eval_file = os.path.join(kwargs['output_dir'], 'nusc_results.json')
+        with open(eval_file, "w") as f:
+            json.dump(nusc_submission, f, indent=2)
         
+        # Call NuScenes evaluation
+        cfg = config_factory('detection_cvpr_2019')
+        nusc_eval = DetectionEval(self.nusc, config=cfg, result_path=eval_file, eval_set=self.split, 
+                                output_dir=kwargs['output_dir'], verbose=True)
+        metric_summary = nusc_eval.main(plot_examples = 10, render_curves=True)
 
-class CadcDataset(BaseCadcDataset):
+        # Reformat the metrics summary a bit for the tensorboard logger
+        err_name_mapping = {
+            'trans_err': 'mATE',
+            'scale_err': 'mASE',
+            'orient_err': 'mAOE',
+            'vel_err': 'mAVE',
+            'attr_err': 'mAAE'
+        }
+        result = {}
+        result['mAP'] = metrics_summary['mean_ap']
+        for key, val in err_name_mapping.items():
+            result[val] = metrics_summary[key] 
+            
+        class_aps = metrics_summary['mean_dist_aps']
+        class_tps = metrics_summary['label_tp_errors']
+        for class_name in class_aps.keys():
+            result['mAP_' + class_name] = class_aps[class_name]
+            for key, val in err_name_mapping.items():
+                result[val + '_' + class_name] = class_tps[class_name][key]
+        
+        return str(result), result
+
+class NuScenesDataset(BaseNuScenesDataset):
     def __init__(self, root_path, class_names, split, training, logger=None):
         """
-        :param root_path: CADC data path
+        :param root_path: NuScenes data path
         :param split:
         """
         super().__init__(root_path=root_path, split=split)
@@ -339,25 +473,25 @@ class CadcDataset(BaseCadcDataset):
 
         self.mode = 'TRAIN' if self.training else 'TEST'
 
-        self.cadc_infos = []
-        self.include_cadc_data(self.mode, logger)
+        self.nuscenes_infos = []
+        self.include_nuscenes_data(self.mode, logger)
         self.dataset_init(class_names, logger)
 
-    def include_cadc_data(self, mode, logger):
+    def include_nuscenes_data(self, mode, logger):
         if cfg.LOCAL_RANK == 0 and logger is not None:
-            logger.info('Loading CADC dataset')
-        cadc_infos = []
+            logger.info('Loading NuScenes dataset')
+        nuscenes_infos = []
 
         for info_path in cfg.DATA_CONFIG[mode].INFO_PATH:
             info_path = cfg.ROOT_DIR / info_path
             with open(info_path, 'rb') as f:
                 infos = pickle.load(f)
-                cadc_infos.extend(infos)
+                nuscenes_infos.extend(infos)
 
-        self.cadc_infos.extend(cadc_infos)
+        self.nuscenes_infos.extend(nuscenes_infos)
 
         if cfg.LOCAL_RANK == 0 and logger is not None:
-            logger.info('Total samples for CADC dataset: %d' % (len(cadc_infos)))
+            logger.info('Total samples for NuScenes dataset: %d' % (len(nuscenes_infos)))
 
     def dataset_init(self, class_names, logger):
         self.db_sampler = None
@@ -400,11 +534,11 @@ class CadcDataset(BaseCadcDataset):
 
 
     def __len__(self):
-        return len(self.cadc_infos)
+        return len(self.nuscenes_infos)
 
     def __getitem__(self, index):
         # index = 4
-        info = copy.deepcopy(self.cadc_infos[index])
+        info = copy.deepcopy(self.nuscenes_infos[index])
 
         sample_idx = info['point_cloud']['lidar_idx']
 
@@ -423,13 +557,13 @@ class CadcDataset(BaseCadcDataset):
             'calib': calib,
         }
 
-        if 'annos' in info:
+        if 'annos' in info and len(info['annos']['location']) > 0:
             annos = info['annos']
             #annos = common_utils.drop_info_with_name(annos, name='DontCare')
             loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
             gt_names = annos['name']
             bbox = annos['bbox']
-            gt_boxes = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1).astype(np.float32)
+            gt_boxes = np.column_stack((loc, dims, rots)).astype(np.float32)
             if 'gt_boxes_lidar' in annos:
                 gt_boxes_lidar = annos['gt_boxes_lidar']
             else:
@@ -442,7 +576,7 @@ class CadcDataset(BaseCadcDataset):
                 'gt_boxes_lidar': gt_boxes_lidar
             })
 
-        example = self.prepare_data(input_dict=input_dict, has_label='annos' in info)
+        example = self.prepare_data(input_dict=input_dict, has_label='annos' in info and len(info['annos']['location']) > 0)
 
         example['sample_idx'] = sample_idx
         example['image_shape'] = img_shape
@@ -450,38 +584,38 @@ class CadcDataset(BaseCadcDataset):
         return example
 
 
-def create_cadc_infos(data_path, save_path, workers=4):
-    dataset = BaseCadcDataset(root_path=data_path)
+def create_nuscenes_infos(data_path, save_path, workers=4):
+    dataset = BaseNuScenesDataset(root_path=data_path)
     train_split, val_split = 'train', 'val'
 
-    train_filename = save_path / ('cadc_infos_%s.pkl' % train_split)
-    val_filename = save_path / ('cadc_infos_%s.pkl' % val_split)
-    trainval_filename = save_path / 'cadc_infos_trainval.pkl'
-    test_filename = save_path / 'cadc_infos_test.pkl'
+    train_filename = save_path / ('nuscenes_infos_%s.pkl' % train_split)
+    val_filename = save_path / ('nuscenes_infos_%s.pkl' % val_split)
+    trainval_filename = save_path / 'nuscenes_infos_trainval.pkl'
+    test_filename = save_path / 'nuscenes_infos_test.pkl'
 
     print('---------------Start to generate data infos---------------')
 
     dataset.set_split(train_split)
-    cadc_infos_train = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
+    nuscenes_infos_train = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
     with open(train_filename, 'wb') as f:
-        pickle.dump(cadc_infos_train, f)
-    print('Cadc info train file is saved to %s' % train_filename)
+        pickle.dump(nuscenes_infos_train, f)
+    print('NuScenes info train file is saved to %s' % train_filename)
 
     dataset.set_split(val_split)
-    cadc_infos_val = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
+    nuscenes_infos_val = dataset.get_infos(num_workers=workers, has_label=True, count_inside_pts=True)
     with open(val_filename, 'wb') as f:
-        pickle.dump(cadc_infos_val, f)
-    print('Cadc info val file is saved to %s' % val_filename)
+        pickle.dump(nuscenes_infos_val, f)
+    print('NuScenes info val file is saved to %s' % val_filename)
 
     with open(trainval_filename, 'wb') as f:
-        pickle.dump(cadc_infos_train + cadc_infos_val, f)
-    print('Cadc info trainval file is saved to %s' % trainval_filename)
+        pickle.dump(nuscenes_infos_train + nuscenes_infos_val, f)
+    print('NuScenes info trainval file is saved to %s' % trainval_filename)
 
-    dataset.set_split('test')
-    cadc_infos_test = dataset.get_infos(num_workers=workers, has_label=False, count_inside_pts=False)
-    with open(test_filename, 'wb') as f:
-        pickle.dump(cadc_infos_test, f)
-    print('Cadc info test file is saved to %s' % test_filename)
+    #dataset.set_split('test')
+    #nuscenes_infos_test = dataset.get_infos(num_workers=workers, has_label=False, count_inside_pts=False)
+    #with open(test_filename, 'wb') as f:
+    #    pickle.dump(nuscenes_infos_test, f)
+    #print('NuScenes info test file is saved to %s' % test_filename)
 
     print('---------------Start create groundtruth database for data augmentation---------------')
     dataset.set_split(train_split)
@@ -491,13 +625,13 @@ def create_cadc_infos(data_path, save_path, workers=4):
 
 
 if __name__ == '__main__':
-    if sys.argv.__len__() > 1 and sys.argv[1] == 'create_cadc_infos':
-        create_cadc_infos(
-            data_path=cfg.ROOT_DIR / 'data' / 'cadcd',
-            save_path=cfg.ROOT_DIR / 'data' / 'cadcd'
+    if sys.argv.__len__() > 1 and sys.argv[1] == 'create_nuscenes_infos':
+        create_nuscenes_infos(
+            data_path=cfg.ROOT_DIR / 'data' / 'nuscenes',
+            save_path=cfg.ROOT_DIR / 'data' / 'nuscenes'
         )
     else:
-        A = CadcDataset(root_path='data/cadcd', class_names=cfg.CLASS_NAMES, split='train', training=True)
+        A = NuScenesDataset(root_path='data/nuscenes', class_names=cfg.CLASS_NAMES, split='train', training=True)
         import pdb
         pdb.set_trace()
         ans = A[1]
