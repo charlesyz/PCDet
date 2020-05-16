@@ -144,7 +144,7 @@ class BaseNuScenesDataset(DatasetTemplate):
                 annotations['token'] = annotations['location'] = annotations['rotation_y'] = \
                 annotations['dimensions'] = annotations['score'] = annotations['difficulty'] = \
                 annotations['truncated'] = annotations['occluded'] = annotations['alpha'] = annotations['bbox'] = np.array([])
-            return annotations
+            return None
 
         annotations = {}
         annotations['name'] = np.array([self.NameMapping[box.name] if box.name in self.NameMapping else 'DontCare' for box in box_list])
@@ -210,6 +210,8 @@ class BaseNuScenesDataset(DatasetTemplate):
 
             if has_label:
                 annotations = self.get_annotation_from_label(calib, sample_token)
+                if (annotations == None):
+                    return None
                 info['annos'] = annotations
             return info
 
@@ -557,13 +559,13 @@ class NuScenesDataset(BaseNuScenesDataset):
             'calib': calib,
         }
 
-        if 'annos' in info and len(info['annos']['location']) > 0:
+        if 'annos' in info:
             annos = info['annos']
             #annos = common_utils.drop_info_with_name(annos, name='DontCare')
             loc, dims, rots = annos['location'], annos['dimensions'], annos['rotation_y']
             gt_names = annos['name']
             bbox = annos['bbox']
-            gt_boxes = np.column_stack((loc, dims, rots)).astype(np.float32)
+            gt_boxes = np.concatenate([loc, dims, rots[..., np.newaxis]], axis=1)
             if 'gt_boxes_lidar' in annos:
                 gt_boxes_lidar = annos['gt_boxes_lidar']
             else:
@@ -576,7 +578,7 @@ class NuScenesDataset(BaseNuScenesDataset):
                 'gt_boxes_lidar': gt_boxes_lidar
             })
 
-        example = self.prepare_data(input_dict=input_dict, has_label='annos' in info and len(info['annos']['location']) > 0)
+        example = self.prepare_data(input_dict=input_dict, has_label='annos' in info)
 
         example['sample_idx'] = sample_idx
         example['image_shape'] = img_shape
