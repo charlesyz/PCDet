@@ -91,7 +91,10 @@ class BaseNuScenesDataset(DatasetTemplate):
         lidar_token = self.nusc.get('sample', sample_token)['data']['LIDAR_TOP']
         lidar_file = os.path.join(self.root_path, self.nusc.get('sample_data', lidar_token)['filename'])
         assert os.path.exists(lidar_file)
-        return np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
+        points = np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
+        points[:, 3] /= 255
+        #points[:, 4] = 0
+        return points
 
     def get_image_shape(self, sample_token):
         img_token = self.nusc.get('sample', sample_token)['data']['CAM_FRONT']
@@ -147,14 +150,17 @@ class BaseNuScenesDataset(DatasetTemplate):
             return None
 
         annotations = {}
-        annotations['name'] = np.array([self.NameMapping[box.name] if box.name in self.NameMapping else 'DontCare' for box in box_list])
-        annotations['num_points_in_gt'] = np.array([self.nusc.get('sample_annotation', box.token)['num_lidar_pts'] for box in box_list])
+        gt_names = np.array([self.NameMapping[box.name] if box.name in self.NameMapping else 'DontCare' for box in box_list])
+        num_points_in_gt = np.array([self.nusc.get('sample_annotation', box.token)['num_lidar_pts'] for box in box_list])
         
         loc_lidar = np.array([box.center for box in box_list]) 
         dims =  np.array([box.wlh for box in box_list]) 
+        #loc_lidar[:,2] -= dims[:,2] / 2 # Translate true center to bottom middle coordinate
         rots = np.array([box.orientation.yaw_pitch_roll[0] for box in box_list])
         gt_boxes_lidar = np.concatenate([loc_lidar, dims, rots[..., np.newaxis]], axis=1)
             
+        annotations['name'] = gt_names
+        annotations['num_points_in_gt'] = num_points_in_gt
         annotations['gt_boxes_lidar'] = gt_boxes_lidar
         annotations['token'] = np.array([box.token for box in box_list])
         
@@ -163,13 +169,21 @@ class BaseNuScenesDataset(DatasetTemplate):
         annotations['rotation_y'] = rots
         annotations['dimensions'] = np.array([[box.wlh[1], box.wlh[2], box.wlh[0]] for box in box_list])  # lhw format
         
+        occluded = np.zeros([num_points_in_gt.shape[0]])
+        easy_mask = num_points_in_gt > 15
+        moderate_mask = num_points_in_gt > 7
+        occluded = np.zeros([num_points_in_gt.shape[0]])
+        occluded[:] = 2
+        occluded[moderate_mask] = 1
+        occluded[easy_mask] = 0
+        
         gt_boxes_camera = box_utils.boxes3d_lidar_to_camera(gt_boxes_lidar, calib)
         assert len(gt_boxes_camera) == len(gt_boxes_lidar) == len(box_list)
         # Currently unused for NuScenes, and don't make too much since as we primarily use 360 degree 3d LIDAR boxes.
         annotations['score'] = np.array([1 for _ in box_list])
         annotations['difficulty'] = np.array([0 for _ in box_list], np.int32)
         annotations['truncated'] = np.array([0 for _ in box_list])
-        annotations['occluded'] = np.array([0 for _ in box_list])
+        annotations['occluded'] = occluded
         annotations['alpha'] = np.array([-np.arctan2(-gt_boxes_lidar[i][1], gt_boxes_lidar[i][0]) + gt_boxes_camera[i][6] for i in range(len(gt_boxes_camera))]) 
         annotations['bbox'] = gt_boxes_camera
         
@@ -221,6 +235,7 @@ class BaseNuScenesDataset(DatasetTemplate):
             infos = executor.map(process_single_scene, sample_id_list)
         # Remove samples with no gt boxes
         infos = [sample for sample in infos if sample] 
+            
         return list(infos)
 
     def create_groundtruth_database(self, info_path=None, used_classes=None, split='train'):
@@ -395,7 +410,11 @@ class BaseNuScenesDataset(DatasetTemplate):
         # Create NuScenes JSON output file
         nusc_annos = {}
         for sample in eval_det_annos:
-            sample_idx = sample['sample_idx'][0]
+            try:
+                sample_idx = sample['sample_idx'][0]
+            except:
+                continue
+            
             sample_results = []
             
             calib = self.get_calib(sample_idx)
@@ -404,13 +423,20 @@ class BaseNuScenesDataset(DatasetTemplate):
             dimensions = sample['boxes_lidar'][:,3:6]
             rotations = sample['boxes_lidar'][:,6]
             
-            for translation, dimension, rotation, label, score in zip(positions_global, dimensions, rotations, sample['name'], sample['score']):
-                quaternion = Quaternion(axis=[0, 0, 1], radians=rotation)
+            for translation, dimension, yaw, label, score in zip(positions_global, dimensions, rotations, sample['name'], sample['score']):
+                quaternion = Quaternion(axis=[0, 0, 1], radians=yaw)
+                #score += 5
+                #score = score / 8 
+                if (float(score) < 0):
+                    score = 0
+                if (float(score) > 1):
+                    score = 1
                 sample_results.append({
                     "sample_token": sample_idx,
                     "translation": translation.tolist(), 
                     "size": dimension.tolist(),
                     "rotation": quaternion.elements.tolist(),
+                    "yaw": float(yaw),
                     "velocity": (0, 0),
                     "detection_name": label.lower(),
                     "detection_score": float(score),
@@ -418,7 +444,11 @@ class BaseNuScenesDataset(DatasetTemplate):
                 })
                 
             nusc_annos[sample_idx] = sample_results
-
+        
+        for sample_id in self.sample_id_list:
+            if sample_id not in nusc_annos:
+                nusc_annos[sample_id] = []
+        
         nusc_submission = {
             "meta": {
                 "use_camera": False,
@@ -448,12 +478,12 @@ class BaseNuScenesDataset(DatasetTemplate):
             'attr_err': 'mAAE'
         }
         result = {}
-        result['mAP'] = metrics_summary['mean_ap']
-        for key, val in err_name_mapping.items():
-            result[val] = metrics_summary[key] 
+        result['mean_ap'] = metric_summary['mean_ap']
+        for tp_name, tp_val in metric_summary['tp_errors'].items():
+            result[tp_name] = tp_val
             
-        class_aps = metrics_summary['mean_dist_aps']
-        class_tps = metrics_summary['label_tp_errors']
+        class_aps = metric_summary['mean_dist_aps']
+        class_tps = metric_summary['label_tp_errors']
         for class_name in class_aps.keys():
             result['mAP_' + class_name] = class_aps[class_name]
             for key, val in err_name_mapping.items():
@@ -489,7 +519,11 @@ class NuScenesDataset(BaseNuScenesDataset):
             with open(info_path, 'rb') as f:
                 infos = pickle.load(f)
                 nuscenes_infos.extend(infos)
-
+        
+        if (self.mode == 'TRAIN'):
+            print("Using subset of training data")
+            nuscenes_infos = nuscenes_infos[::4]    
+        
         self.nuscenes_infos.extend(nuscenes_infos)
 
         if cfg.LOCAL_RANK == 0 and logger is not None:
