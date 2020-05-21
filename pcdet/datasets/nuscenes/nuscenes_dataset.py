@@ -418,25 +418,36 @@ class BaseNuScenesDataset(DatasetTemplate):
             sample_results = []
             
             calib = self.get_calib(sample_idx)
+            
             sample['boxes_lidar'] = np.array(sample['boxes_lidar'])
-            positions_global = calib.lidar_to_global(sample['boxes_lidar'][:,:3])
+            positions = sample['boxes_lidar'][:,:3]
             dimensions = sample['boxes_lidar'][:,3:6]
             rotations = sample['boxes_lidar'][:,6]
             
-            for translation, dimension, yaw, label, score in zip(positions_global, dimensions, rotations, sample['name'], sample['score']):
+            for center, dimension, yaw, label, score in zip(positions, dimensions, rotations, sample['name'], sample['score']):
+                
                 quaternion = Quaternion(axis=[0, 0, 1], radians=yaw)
-                #score += 5
-                #score = score / 8 
+                
+                box = Box(center, dimension, quaternion)
+                # Move box to ego vehicle coord system
+                box.rotate(Quaternion(calib.lidar_calibrated['rotation']))
+                box.translate(np.array(calib.lidar_calibrated['translation']))
+                # Move box to global coord system
+                box.rotate(Quaternion(calib.ego_pose['rotation']))
+                box.translate(np.array(calib.ego_pose['translation']))
+                
                 if (float(score) < 0):
                     score = 0
                 if (float(score) > 1):
                     score = 1
+                if (label == 'Cyclist'):
+                    label = 'bicycle'
                 sample_results.append({
                     "sample_token": sample_idx,
-                    "translation": translation.tolist(), 
-                    "size": dimension.tolist(),
-                    "rotation": quaternion.elements.tolist(),
-                    "yaw": float(yaw),
+                    "translation": box.center.tolist(), 
+                    "size": box.wlh.tolist(),
+                    "rotation": box.orientation.elements.tolist(),
+                    "lidar_yaw": float(yaw),
                     "velocity": (0, 0),
                     "detection_name": label.lower(),
                     "detection_score": float(score),
@@ -520,9 +531,9 @@ class NuScenesDataset(BaseNuScenesDataset):
                 infos = pickle.load(f)
                 nuscenes_infos.extend(infos)
         
-        if (self.mode == 'TRAIN'):
-            print("Using subset of training data")
-            nuscenes_infos = nuscenes_infos[::4]    
+        #if (self.mode == 'TRAIN'):
+        #    print("Using subset of training data")
+        #    nuscenes_infos = nuscenes_infos[::4]    
         
         self.nuscenes_infos.extend(nuscenes_infos)
 
@@ -665,6 +676,7 @@ if __name__ == '__main__':
         create_nuscenes_infos(
             data_path=cfg.ROOT_DIR / 'data' / 'nuscenes',
             save_path=cfg.ROOT_DIR / 'data' / 'nuscenes'
+            
         )
     else:
         A = NuScenesDataset(root_path='data/nuscenes', class_names=cfg.CLASS_NAMES, split='train', training=True)

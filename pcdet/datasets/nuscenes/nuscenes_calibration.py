@@ -27,6 +27,10 @@ class Calibration(object):
         camera_intrinsic = np.array(cam_calibrated['camera_intrinsic'])
         self.t_img_cam = np.eye(4)
         self.t_img_cam[:camera_intrinsic.shape[0], :camera_intrinsic.shape[1]] = camera_intrinsic
+        
+        self.ego_pose = ego_pose
+        self.lidar_calibrated = lidar_calibrated
+        self.cam_calibrated = cam_calibrated
 
     def cart_to_hom(self, pts):
         """

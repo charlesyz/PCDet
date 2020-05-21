@@ -320,7 +320,7 @@ class BaseKittiDataset(DatasetTemplate):
                         print('%s -1 -1 %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f'
                               % (single_anno['name'][idx], single_anno['alpha'][idx], bbox[idx][0], bbox[idx][1],
                                  bbox[idx][2], bbox[idx][3], dims[idx][1], dims[idx][2], dims[idx][0], loc[idx][0],
-                                 loc[idx][1], loc[idx][2], single_anno['rotation_y'][idx], single_anno['score'][idx]),
+                                 loc[idx][1], loc[idx][2], single_anno['rotation_y'][idx], single_anno['score'][idx]),\
                               file=f)
 
         return annos
