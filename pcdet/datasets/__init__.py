@@ -5,11 +5,17 @@ from torch.utils.data import DataLoader
 from ..config import cfg
 from .dataset import DatasetTemplate
 from .kitti.kitti_dataset import BaseKittiDataset, KittiDataset
+from .cadc.cadc_dataset import BaseCadcDataset, CadcDataset
+from .nuscenes.nuscenes_dataset import BaseNuScenesDataset, NuScenesDataset
 
 __all__ = {
     'DatasetTemplate': DatasetTemplate,
     'BaseKittiDataset': BaseKittiDataset,
-    'KittiDataset': KittiDataset
+    'KittiDataset': KittiDataset,
+    'BaseCadcDataset': BaseCadcDataset,
+    'CadcDataset': CadcDataset,
+    'BaseNuScenesDataset': BaseNuScenesDataset,
+    'NuScenesDataset': NuScenesDataset,
 }
 
 

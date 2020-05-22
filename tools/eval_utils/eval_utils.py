@@ -79,7 +79,7 @@ def eval_one_epoch(model, dataloader, epoch_id, logger, save_to_file=False, resu
     with open(result_dir / 'result.pkl', 'wb') as f:
         pickle.dump(det_annos, f)
 
-    result_str, result_dict = dataset.evaluation(det_annos, class_names, eval_metric=cfg.MODEL.TEST.EVAL_METRIC)
+    result_str, result_dict = dataset.evaluation(det_annos, class_names, eval_metric=cfg.MODEL.TEST.EVAL_METRIC, output_dir = result_dir)
 
     logger.info(result_str)
     ret_dict.update(result_dict)
