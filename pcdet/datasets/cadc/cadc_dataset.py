@@ -34,7 +34,9 @@ class BaseCadcDataset(DatasetTemplate):
         date, set_num, idx = sample_idx
         lidar_file = os.path.join(self.root_path, date, set_num, 'labeled', 'lidar_points', 'data', '%s.bin' % idx)
         assert os.path.exists(lidar_file)
-        return np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
+        points = np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
+        points[:, 3] /= 255
+        return points
 
     def get_image_shape(self, sample_idx):
         date, set_num, idx = sample_idx

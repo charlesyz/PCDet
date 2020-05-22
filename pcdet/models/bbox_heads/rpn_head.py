@@ -23,6 +23,7 @@ class AnchorHead(nn.Module):
                     cur_cfg = a_cfg
                     break
             assert cur_cfg is not None, 'Not found anchor config: %s' % cur_name
+            custom_values = cur_cfg['custom_values'] if 'custom_values' in cur_cfg else []
             anchor_generator = AnchorGeneratorRange(
                 anchor_ranges=cur_cfg['anchor_range'],
                 sizes=cur_cfg['sizes'],
@@ -30,6 +31,7 @@ class AnchorHead(nn.Module):
                 class_name=cur_cfg['class_name'],
                 match_threshold=cur_cfg['matched_threshold'],
                 unmatch_threshold=cur_cfg['unmatched_threshold']
+                custom_values=custom_values
             )
             anchor_generators.append(anchor_generator)
 

@@ -68,6 +68,13 @@ class BaseNuScenesDataset(DatasetTemplate):
         
         self.sample_id_list = self.get_sample_tokens_from_scenes(split_scene_tokens)
         
+        try:
+            self.max_sweeps = cfg.DATA_CONFIG.MAX_SWEEPS
+        except:
+            self.max_sweeps = 10
+            
+        self.with_velocity = True
+        
     def get_sample_tokens_from_scenes(self, scene_tokens):
         """
         :param scene_tokens: List of scene tokens
@@ -86,15 +93,77 @@ class BaseNuScenesDataset(DatasetTemplate):
     
     def set_split(self, split):
         self.__init__(self.root_path, split, False)
-
+    
     def get_lidar(self, sample_token):
         lidar_token = self.nusc.get('sample', sample_token)['data']['LIDAR_TOP']
-        lidar_file = os.path.join(self.root_path, self.nusc.get('sample_data', lidar_token)['filename'])
+        sample_data = self.nusc.get('sample_data', lidar_token)
+        lidar_file = os.path.join(self.root_path, sample_data['filename'])
         assert os.path.exists(lidar_file)
-        points = np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
+        points = np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 5)
         points[:, 3] /= 255
-        #points[:, 4] = 0
+        points[:, 4] = 0
+        
+        sweep_points_list = self.get_sweeps(sample_token, self.max_sweeps)
+        sweep_points_list.append(points)
+        points = np.concatenate(sweep_points_list, axis=0)[:, [0, 1, 2, 4]]
+        
         return points
+
+
+    def get_sweeps(self, sample_token, max_sweeps):
+        lidar_token = self.nusc.get('sample', sample_token)['data']['LIDAR_TOP']
+        sample_data = self.nusc.get('sample_data', lidar_token)
+        
+        # Transforms for putting all seeps in the same frame
+        cs_record = nusc.get('calibrated_sensor',
+                             sample_data['calibrated_sensor_token'])
+        pose_record = nusc.get('ego_pose', sample_data['ego_pose_token'])
+        l2e_r = cs_record['rotation']
+        l2e_t = cs_record['translation']
+        e2g_r = pose_record['rotation']
+        e2g_t = pose_record['translation']
+        l2e_r_mat = Quaternion(l2e_r).rotation_matrix
+        e2g_r_mat = Quaternion(e2g_r).rotation_matrix
+        
+        timestamp = sample_data['timestamp'] / 1e6
+        sweep_points_list = []
+        
+        # Accumulate sweeps 
+        while len(sweeps) < max_sweeps:
+            if sample_data['prev'] == "":
+                break
+        
+            sample_data = self.nusc.get('sample_data', sample_data['prev'])
+            cs_record = self.nusc.get('calibrated_sensor',
+                                    sample_data['calibrated_sensor_token'])
+            pose_record = self.nusc.get('ego_pose', sample_data['ego_pose_token'])
+            lidar_path = self.nusc.get_sample_data_path(sample_data['token'])
+            sweep_ts = sample_data["timestamp"]
+            l2e_r_s = cs_record['rotation']
+            l2e_t_s = cs_record['translation']
+            e2g_r_s = pose_record['rotation']
+            e2g_t_s = pose_record['translation']
+            # sweep->ego->global->ego'->lidar
+            l2e_r_s_mat = Quaternion(l2e_r_s).rotation_matrix
+            e2g_r_s_mat = Quaternion(e2g_r_s).rotation_matrix
+
+            R = (l2e_r_s_mat.T @ e2g_r_s_mat.T) @ (
+                np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
+            T = (l2e_t_s @ e2g_r_s_mat.T + e2g_t_s) @ (
+                np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(l2e_r_mat).T)
+            T -= e2g_t @ (np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(
+                l2e_r_mat).T) + l2e_t @ np.linalg.inv(l2e_r_mat).T
+            sweep2lidar_rotation = R.T  # points @ R.T + T
+            sweep2lidar_translation = T
+            
+            points_sweep = np.fromfile( str(lidar_path), dtype=np.float32, count=-1).reshape([-1, 5])
+            points_sweep[:, 3] /= 255
+            points_sweep[:, :3] = points_sweep[:, :3] @ sweep2lidar_rotation.T
+            points_sweep[:, :3] += sweep2lidar_translation
+            points_sweep[:, 4] = timestamp - sweep_ts
+            sweep_points_list.append(points_sweep)
+            
+        return sweep_points_list
 
     def get_image_shape(self, sample_token):
         img_token = self.nusc.get('sample', sample_token)['data']['CAM_FRONT']
@@ -146,7 +215,8 @@ class BaseNuScenesDataset(DatasetTemplate):
             annotations['name'] = annotations['num_points_in_gt'] = annotations['gt_boxes_lidar'] = \
                 annotations['token'] = annotations['location'] = annotations['rotation_y'] = \
                 annotations['dimensions'] = annotations['score'] = annotations['difficulty'] = \
-                annotations['truncated'] = annotations['occluded'] = annotations['alpha'] = annotations['bbox'] = np.array([])
+                annotations['truncated'] = annotations['occluded'] = annotations['alpha'] = \
+                annotations['bbox'] = annotations['gt_velocity'] = np.array([])
             return None
 
         annotations = {}
@@ -158,10 +228,19 @@ class BaseNuScenesDataset(DatasetTemplate):
         #loc_lidar[:,2] -= dims[:,2] / 2 # Translate true center to bottom middle coordinate
         rots = np.array([box.orientation.yaw_pitch_roll[0] for box in box_list])
         gt_boxes_lidar = np.concatenate([loc_lidar, dims, rots[..., np.newaxis]], axis=1)
+        
+        velocity_global = np.array([nusc.box_velocity(token)[:2] for box.token in box in box_list]).reshape(-1, 2) # x,y velocity
+        nan_mask = np.isnan(velocity_global[:, 0])
+        velocity_global[nan_mask] = [0.0, 0.0]
+        velocity = calib.velo_global_to_lidar(velocity_lidar)
+        
+        if self.with_velocity:
+            gt_boxes_lidar = np.concatenate([gt_boxes_lidar, gt_velocity], axis=-1)
             
         annotations['name'] = gt_names
         annotations['num_points_in_gt'] = num_points_in_gt
         annotations['gt_boxes_lidar'] = gt_boxes_lidar
+        annotations['gt_velocity'] = velocity
         annotations['token'] = np.array([box.token for box in box_list])
         
         # in CAM_FRONT frame. Probably meaningless as most objects aren't in frame.
