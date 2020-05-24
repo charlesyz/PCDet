@@ -92,6 +92,7 @@ MODEL:
             TARGET_CONFIG:
                 DOWNSAMPLED_FACTOR: 2 
                 BOX_CODER: ResidualCoder
+                CODE_SIZE: 9
 
                 REGION_SIMILARITY_FN: nearest_iou_similarity
                 SAMPLE_POS_FRACTION: -1.0

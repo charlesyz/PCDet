@@ -36,8 +36,8 @@ class UNetHead(nn.Module):
             if True or self.target_generated_on == 'head_cpu':
                 cur_cls_labels, cur_part_reg_labels, cur_bbox_reg_labels = self.generate_part_targets_cpu(
                     points=batch_points[k],
-                    gt_boxes=gt_boxes[k][:, 0:7],
-                    gt_classes=gt_boxes[k][:, 7],
+                    gt_boxes=gt_boxes[k][:, 0:-1],
+                    gt_classes=gt_boxes[k][:, -1],
                     generate_bbox_reg_labels=generate_bbox_reg_labels
                 )
             else:
@@ -73,7 +73,7 @@ class UNetHead(nn.Module):
         extend_gt_boxes = common_utils.enlarge_box3d(gt_boxes, extra_width=self.gt_extend_width)
         cls_labels = torch.zeros(points.shape[0]).int()
         part_reg_labels = torch.zeros((points.shape[0], 3)).float()
-        bbox_reg_labels = torch.zeros((points.shape[0], 7)).float() if generate_bbox_reg_labels else None
+        bbox_reg_labels = torch.zeros((points.shape[0], len(gt_boxes[0]))).float() if generate_bbox_reg_labels else None
 
         point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(points, gt_boxes).long()
         extend_point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(points, extend_gt_boxes).long()

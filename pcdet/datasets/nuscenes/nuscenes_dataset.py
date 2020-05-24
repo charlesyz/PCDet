@@ -115,9 +115,9 @@ class BaseNuScenesDataset(DatasetTemplate):
         sample_data = self.nusc.get('sample_data', lidar_token)
         
         # Transforms for putting all seeps in the same frame
-        cs_record = nusc.get('calibrated_sensor',
+        cs_record = self.nusc.get('calibrated_sensor',
                              sample_data['calibrated_sensor_token'])
-        pose_record = nusc.get('ego_pose', sample_data['ego_pose_token'])
+        pose_record = self.nusc.get('ego_pose', sample_data['ego_pose_token'])
         l2e_r = cs_record['rotation']
         l2e_t = cs_record['translation']
         e2g_r = pose_record['rotation']
@@ -129,7 +129,7 @@ class BaseNuScenesDataset(DatasetTemplate):
         sweep_points_list = []
         
         # Accumulate sweeps 
-        while len(sweeps) < max_sweeps:
+        while len(sweep_points_list) < max_sweeps:
             if sample_data['prev'] == "":
                 break
         
@@ -229,10 +229,10 @@ class BaseNuScenesDataset(DatasetTemplate):
         rots = np.array([box.orientation.yaw_pitch_roll[0] for box in box_list])
         gt_boxes_lidar = np.concatenate([loc_lidar, dims, rots[..., np.newaxis]], axis=1)
         
-        velocity_global = np.array([nusc.box_velocity(token)[:2] for box.token in box in box_list]).reshape(-1, 2) # x,y velocity
+        velocity_global = np.array([self.nusc.box_velocity(box.token)[:2] for box in box_list]).reshape(-1, 2) # x,y 
         nan_mask = np.isnan(velocity_global[:, 0])
         velocity_global[nan_mask] = [0.0, 0.0]
-        velocity = calib.velo_global_to_lidar(velocity_lidar)
+        gt_velocity = calib.velo_global_to_lidar(velocity_global)
         
         if self.with_velocity:
             gt_boxes_lidar = np.concatenate([gt_boxes_lidar, gt_velocity], axis=-1)
@@ -240,7 +240,7 @@ class BaseNuScenesDataset(DatasetTemplate):
         annotations['name'] = gt_names
         annotations['num_points_in_gt'] = num_points_in_gt
         annotations['gt_boxes_lidar'] = gt_boxes_lidar
-        annotations['gt_velocity'] = velocity
+        annotations['gt_velocity'] = gt_velocity
         annotations['token'] = np.array([box.token for box in box_list])
         
         # in CAM_FRONT frame. Probably meaningless as most objects aren't in frame.
@@ -343,7 +343,7 @@ class BaseNuScenesDataset(DatasetTemplate):
             
             num_obj = gt_boxes.shape[0]
             point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
-                torch.from_numpy(points[:, 0:3]), torch.from_numpy(gt_boxes)
+                torch.from_numpy(points[:, 0:3]), torch.from_numpy(gt_boxes[:,:7])
             ).numpy()  # (nboxes, npoints)
 
             for i in range(num_obj):
@@ -502,12 +502,16 @@ class BaseNuScenesDataset(DatasetTemplate):
             positions = sample['boxes_lidar'][:,:3]
             dimensions = sample['boxes_lidar'][:,3:6]
             rotations = sample['boxes_lidar'][:,6]
+                
+            velocities = [(np.nan, np.nan, np.nan) for _ in sample['boxes_lidar']]
+            if sample['boxes_lidar'].shape[-1] == 9:
+                velocities = sample['boxes_lidar'][:,7:9]
             
-            for center, dimension, yaw, label, score in zip(positions, dimensions, rotations, sample['name'], sample['score']):
+            for center, dimension, yaw, label, score, velocity in zip(positions, dimensions, rotations, sample['name'], sample['score'], velocities):
                 
                 quaternion = Quaternion(axis=[0, 0, 1], radians=yaw)
                 
-                box = Box(center, dimension, quaternion)
+                box = Box(center, dimension, quaternion, velocity=(*velocity, 0.0))
                 # Move box to ego vehicle coord system
                 box.rotate(Quaternion(calib.lidar_calibrated['rotation']))
                 box.translate(np.array(calib.lidar_calibrated['translation']))
@@ -527,7 +531,7 @@ class BaseNuScenesDataset(DatasetTemplate):
                     "size": box.wlh.tolist(),
                     "rotation": box.orientation.elements.tolist(),
                     "lidar_yaw": float(yaw),
-                    "velocity": (0, 0),
+                    "velocity": box.velocity[:2].tolist(),
                     "detection_name": label.lower(),
                     "detection_score": float(score),
                     "attribute_name": self.DefaultAttribute[label.lower()],

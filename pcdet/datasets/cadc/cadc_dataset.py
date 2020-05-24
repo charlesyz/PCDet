@@ -174,7 +174,7 @@ class BaseCadcDataset(DatasetTemplate):
 
             num_obj = gt_boxes.shape[0]
             point_indices = roiaware_pool3d_utils.points_in_boxes_cpu(
-                torch.from_numpy(points[:, 0:3]), torch.from_numpy(gt_boxes)
+                torch.from_numpy(points[:, 0:3]), torch.from_numpy(gt_boxes[:,:7])
             ).numpy()  # (nboxes, npoints)
 
             for i in range(num_obj):

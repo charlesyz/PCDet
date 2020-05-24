@@ -239,7 +239,7 @@ def noise_per_object_v3_(gt_boxes, points=None, valid_mask=None, rotation_pertur
     use kitti viewer to test this function points_transform_
 
     Args:
-        gt_boxes: [N, 7], gt box in lidar.points_transform_
+        gt_boxes: [N, 7 + ?], gt box in lidar.points_transform_
         points: [M, 4], point cloud in lidar.
     """
     num_boxes = gt_boxes.shape[0]
@@ -265,11 +265,11 @@ def noise_per_object_v3_(gt_boxes, points=None, valid_mask=None, rotation_pertur
     if points is not None:
         # mark points in noised position
         point_masks_dst = roiaware_pool3d_utils.points_in_boxes_cpu(
-            torch.from_numpy(points[:, :3]), torch.from_numpy(gt_boxes)
+            torch.from_numpy(points[:, :3]), torch.from_numpy(gt_boxes[:,:7])
         ).numpy().transpose()  # (num_points, num_boxes)
 
         point_masks = roiaware_pool3d_utils.points_in_boxes_cpu(
-            torch.from_numpy(points[:, :3]), torch.from_numpy(gt_boxes_before_noise)
+            torch.from_numpy(points[:, :3]), torch.from_numpy(gt_boxes_before_noise[:,:7])
         ).numpy().transpose()  # (num_points, num_boxes)
 
         points_transform_(points, gt_boxes_before_noise[:, :3], point_masks, loc_transforms, rot_transforms, valid_mask)

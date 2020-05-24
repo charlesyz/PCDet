@@ -49,8 +49,8 @@ def sample_rois_for_rcnn(roi_boxes3d, gt_boxes3d, roi_raw_scores, roi_labels, ro
     :param roi_raw_scores: (B, N)
     :param roi_labels: (B, N)
     :return
-        batch_rois: (B, N, 7)
-        batch_gt_of_rois: (B, N, 7 + 1)
+        batch_rois: (B, N, 7 + ?)
+        batch_gt_of_rois: (B, N, 7 + ? + 1)
         batch_roi_iou: (B, N)
     """
     batch_size = roi_boxes3d.size(0)
@@ -74,12 +74,12 @@ def sample_rois_for_rcnn(roi_boxes3d, gt_boxes3d, roi_raw_scores, roi_labels, ro
         cur_gt = cur_gt[:k + 1]
 
         if len(cfg.CLASS_NAMES) == 1:
-            iou3d = iou3d_nms_utils.boxes_iou3d_gpu(cur_roi, cur_gt[:, 0:7])  # (M, N)
+            iou3d = iou3d_nms_utils.boxes_iou3d_gpu(cur_roi, cur_gt[:, 0:-1])  # (M, N)
             max_overlaps, gt_assignment = torch.max(iou3d, dim=1)
         else:
             cur_gt_labels = cur_gt[:, -1].long()
             max_overlaps, gt_assignment = get_maxiou3d_with_same_class(cur_roi, cur_roi_labels,
-                                                                       cur_gt[:, 0:7], cur_gt_labels)
+                                                                       cur_gt[:, 0:-1], cur_gt_labels)
 
         # sample fg, easy_bg, hard_bg
         fg_thresh = min(roi_sampler_cfg.REG_FG_THRESH, roi_sampler_cfg.CLS_FG_THRESH)

@@ -229,7 +229,7 @@ def remove_points_in_boxes3d(points, boxes3d):
     :return:
     """
     point_masks = roiaware_pool3d_utils.points_in_boxes_cpu(
-        torch.from_numpy(points[:, 0:3]), torch.from_numpy(boxes3d)
+        torch.from_numpy(points[:, 0:3]), torch.from_numpy(boxes3d[:,:7])
     ).numpy()
     return points[point_masks.sum(axis=0) == 0]
 

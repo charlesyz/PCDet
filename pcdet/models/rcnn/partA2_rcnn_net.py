@@ -26,8 +26,8 @@ class RCNNHead(nn.Module):
         with torch.no_grad():
             targets_dict = proposal_target_layer(rcnn_dict, roi_sampler_cfg=self.rcnn_target_config)
 
-        rois = targets_dict['rois']  # (B, N, 7)
-        gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + 1)
+        rois = targets_dict['rois']  # (B, N, 7 + ?)
+        gt_of_rois = targets_dict['gt_of_rois']  # (B, N, 7 + ? + 1)
         targets_dict['gt_of_rois_src'] = gt_of_rois.clone().detach()
 
         # canonical transformation
@@ -127,8 +127,8 @@ class RCNNHead(nn.Module):
                     rcnn_boxes3d[:, 0:3] += roi_xyz
 
                     loss_corner = loss_utils.get_corner_loss_lidar(
-                        rcnn_boxes3d[:, 0:7],
-                        gt_of_rois_src[fg_mask][:, 0:7]
+                        rcnn_boxes3d[:, 0:-1],
+                        gt_of_rois_src[fg_mask][:, 0:-1]
                     )
                     loss_corner = loss_corner.mean()
                     loss_corner = loss_corner * LOSS_WEIGHTS['rcnn_corner_weight']
@@ -277,7 +277,7 @@ class SpConvRCNN(RCNNHead):
             cur_voxel_centers = voxel_centers[bs_mask]
             cur_part_features = part_features[bs_mask]
             cur_rpn_features = rpn_features[bs_mask]
-            cur_roi = batch_rois[bs_idx][:, 0:7].contiguous()  # (N, 7)
+            cur_roi = batch_rois[bs_idx][:, 0:-1].contiguous()  # (N, 7)
 
             pooled_part_features = self.roiaware_pool3d_layer.forward(
                 cur_roi, cur_voxel_centers, cur_part_features, pool_method='avg'
@@ -501,7 +501,7 @@ class FCRCNN(RCNNHead):
             cur_voxel_centers = voxel_centers[bs_mask]
             cur_part_features = part_features[bs_mask]
             cur_rpn_features = rpn_features[bs_mask]
-            cur_roi = batch_rois[bs_idx][:, 0:7].contiguous()  # (N, 7)
+            cur_roi = batch_rois[bs_idx][:, 0:-1].contiguous()  # (N, 7)
 
             pooled_part_features = self.roiaware_pool3d_layer.forward(
                 cur_roi, cur_voxel_centers, cur_part_features, pool_method='avg'

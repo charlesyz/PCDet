@@ -220,7 +220,7 @@ class AnchorGeneratorRange(object):
 
     @property
     def custom_values(self):
-        return self.custom_values
+        return self._custom_values
 
     @property
     def feature_map_size(self):
@@ -231,6 +231,14 @@ class AnchorGeneratorRange(object):
         num_rot = len(self._rotations)
         num_size = np.array(self._sizes).reshape([-1, 3]).shape[0]
         return num_rot * num_size
+
+    @property 
+    def ndim(self):
+        return 7 + len(self._custom_values)
+
+    @property 
+    def custom_ndim(self):
+        return len(self._custom_values)
 
     def generate(self, feature_map_size):
         anchors = create_anchors_3d_range(feature_map_size, self._anchor_ranges, self._sizes,
@@ -413,7 +421,8 @@ class TargetAssigner(object):
         targets_dict['bbox_outside_weights'] = np.concatenate([v.reshape(-1)
                                                                for v in targets_dict['bbox_outside_weights']], axis=0)
         return targets_dict
-
+        
+        
     def create_target_np(self, all_anchors,
                          gt_boxes,
                          similarity_fn,
@@ -627,3 +636,8 @@ class TargetAssigner(object):
     @property
     def classes(self):
         return [a.class_name for a in self.anchor_generators]
+        
+        
+    @property
+    def box_ndim(self):
+        return self.anchor_generators[0].ndim

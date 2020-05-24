@@ -30,12 +30,15 @@ class AnchorHead(nn.Module):
                 rotations=cur_cfg['rotations'],
                 class_name=cur_cfg['class_name'],
                 match_threshold=cur_cfg['matched_threshold'],
-                unmatch_threshold=cur_cfg['unmatched_threshold']
+                unmatch_threshold=cur_cfg['unmatched_threshold'],
                 custom_values=custom_values
             )
             anchor_generators.append(anchor_generator)
-
-        self.box_coder = getattr(box_coder_utils, anchor_target_cfg.BOX_CODER)()
+            
+        code_size = 7
+        if hasattr(anchor_target_cfg, 'CODE_SIZE'):
+            code_size = anchor_target_cfg.CODE_SIZE
+        self.box_coder = getattr(box_coder_utils, anchor_target_cfg.BOX_CODER)(code_size)
 
         self.target_assigner = TargetAssigner(
             anchor_generators=anchor_generators,
@@ -51,7 +54,7 @@ class AnchorHead(nn.Module):
         feature_map_size = [*feature_map_size, 1][::-1]
         ret = self.target_assigner.generate_anchors(feature_map_size)
         anchors_dict = self.target_assigner.generate_anchors_dict(feature_map_size)
-        anchors = ret['anchors'].reshape([-1, 7])
+        anchors = ret['anchors'].reshape([-1, self.target_assigner.box_ndim])
         self.anchor_cache = {
             'anchors': anchors,
             'anchors_dict': anchors_dict,
@@ -71,13 +74,13 @@ class AnchorHead(nn.Module):
 
     def assign_targets(self, gt_boxes):
         """
-        :param gt_boxes: (B, N, 8)
+        :param gt_boxes: (B, N, 8 + custom_values)
         :return:
         """
         gt_boxes = gt_boxes.cpu().numpy()
         batch_size = gt_boxes.shape[0]
-        gt_classes = gt_boxes[:, :, 7]
-        gt_boxes = gt_boxes[:, :, :7]
+        gt_classes = gt_boxes[:, :, -1]
+        gt_boxes = gt_boxes[:, :, :-1]
         targets_dict_list = []
         for k in range(batch_size):
             cur_gt = gt_boxes[k]
