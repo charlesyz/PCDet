@@ -104,14 +104,14 @@ class Calibration(object):
         t_global_lidar = np.dot(self.t_global_car, self.t_car_lidar)
         return np.matmul(t_global_lidar,pts_lidar_hom.T).T[:,0:3]
     
-    def velo_global_to_lidar(self, velo_xy)
+    def velo_global_to_lidar(self, velo_xy):
         """
         :param velo_xy: (N, 2)
         :return velo_lidar: (N, 2)
         """
-        velo_hom = cart_to_hom(velo_xy)
+        velo_hom = self.cart_to_hom(velo_xy)
         
-        l2e_r = self.calibrated_sensor['rotation']
+        l2e_r = self.lidar_calibrated['rotation']
         e2g_r = self.ego_pose['rotation']
         l2e_r_mat = Quaternion(l2e_r).rotation_matrix
         e2g_r_mat = Quaternion(e2g_r).rotation_matrix
