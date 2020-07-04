@@ -15,7 +15,7 @@ from pcdet.config import cfg
 from pcdet.datasets.data_augmentation.dbsampler import DataBaseSampler
 from pcdet.datasets import DatasetTemplate
 from pcdet.datasets.cadc import cadc_calibration
-
+from .eval import get_coco_eval_result, get_official_eval_result
 
 class BaseCadcDataset(DatasetTemplate):
     def __init__(self, root_path, split='train'):
@@ -315,16 +315,39 @@ class BaseCadcDataset(DatasetTemplate):
 
     def evaluation(self, det_annos, class_names, **kwargs):
         assert 'annos' in self.cadc_infos[0].keys()
-        import pcdet.datasets.kitti.kitti_object_eval_python.eval as kitti_eval
 
         if 'annos' not in self.cadc_infos[0]:
             return 'None', {}
 
         eval_det_annos = copy.deepcopy(det_annos)
         eval_gt_annos = [copy.deepcopy(info['annos']) for info in self.cadc_infos]
-        ap_result_str, ap_dict = kitti_eval.get_official_eval_result(eval_gt_annos, eval_det_annos, class_names)
-
-        return ap_result_str, ap_dict
+        
+        z_axis = 2
+        z_center = 0.5
+        # for regular raw lidar data, z_axis = 2, z_center = 0.5.
+        result_official_dict = get_official_eval_result(
+            gt_annos,
+            dt_annos,
+            mapped_class_names,
+            z_axis=z_axis,
+            z_center=z_center)
+        result_coco = get_coco_eval_result(
+            gt_annos,
+            dt_annos,
+            mapped_class_names,
+            z_axis=z_axis,
+            z_center=z_center)
+        ret = {
+            "results": {
+                "official": result_official_dict["result"],
+                "coco": result_coco["result"],
+            },
+            "detail": {
+                "official": result_official_dict["detail"],
+                "coco": result_coco["detail"],
+            },
+        }
+        return str(ret), ret
         
 
 class CadcDataset(BaseCadcDataset):

@@ -105,9 +105,10 @@ class BaseNuScenesDataset(DatasetTemplate):
         
         sweep_points_list = self.get_sweeps(sample_token, self.max_sweeps)
         sweep_points_list.append(points)
+        num_sweeps = len(sweep_points_list)
         points = np.concatenate(sweep_points_list, axis=0)[:, [0, 1, 2, 4]]
         
-        return points
+        return points, num_sweeps
 
 
     def get_sweeps(self, sample_token, max_sweeps):
@@ -331,7 +332,7 @@ class BaseNuScenesDataset(DatasetTemplate):
             print('gt_database sample: %d/%d' % (k + 1, len(infos)))
             info = infos[k]
             sample_idx = info['point_cloud']['lidar_idx']
-            points = self.get_lidar(sample_idx)
+            points, num_sweeps = self.get_lidar(sample_idx)
             annos = info['annos']
             names = annos['name']
             difficulty = annos['difficulty']
@@ -399,11 +400,12 @@ class BaseNuScenesDataset(DatasetTemplate):
     @staticmethod
     def generate_annotations(input_dict, pred_dicts, class_names, save_to_file=False, output_dir=None):
         def get_empty_prediction():
+            box_size = 9 if self.with_velocity else 7
             ret_dict = {
                 'name': np.array([]), 'truncated': np.array([]), 'occluded': np.array([]),
                 'alpha': np.array([]), 'bbox': np.zeros([0, 4]), 'dimensions': np.zeros([0, 3]),
                 'location': np.zeros([0, 3]), 'rotation_y': np.array([]), 'score': np.array([]),
-                'boxes_lidar': np.zeros([0, 7])
+                'boxes_lidar': np.zeros([0, box_size])
             }
             return ret_dict
 
@@ -485,19 +487,22 @@ class BaseNuScenesDataset(DatasetTemplate):
     def evaluation(self, det_annos, class_names, **kwargs):
 
         eval_det_annos = copy.deepcopy(det_annos)
-    
+        
+        print("START EVAL")
         # Create NuScenes JSON output file
         nusc_annos = {}
         for sample in eval_det_annos:
             try:
                 sample_idx = sample['sample_idx'][0]
             except:
+                print("NO SAMPLE IDX")
                 continue
             
             sample_results = []
             
             calib = self.get_calib(sample_idx)
             
+            print("SAMPLE: ", sample_idx)
             sample['boxes_lidar'] = np.array(sample['boxes_lidar'])
             positions = sample['boxes_lidar'][:,:3]
             dimensions = sample['boxes_lidar'][:,3:6]
@@ -519,6 +524,8 @@ class BaseNuScenesDataset(DatasetTemplate):
                 box.rotate(Quaternion(calib.ego_pose['rotation']))
                 box.translate(np.array(calib.ego_pose['translation']))
                 
+                velocity = box.velocity[:2].tolist()
+
                 if (float(score) < 0):
                     score = 0
                 if (float(score) > 1):
@@ -531,7 +538,7 @@ class BaseNuScenesDataset(DatasetTemplate):
                     "size": box.wlh.tolist(),
                     "rotation": box.orientation.elements.tolist(),
                     "lidar_yaw": float(yaw),
-                    "velocity": box.velocity[:2].tolist(),
+                    "velocity": velocity,
                     "detection_name": label.lower(),
                     "detection_score": float(score),
                     "attribute_name": self.DefaultAttribute[label.lower()],
@@ -672,7 +679,7 @@ class NuScenesDataset(BaseNuScenesDataset):
 
         sample_idx = info['point_cloud']['lidar_idx']
 
-        points = self.get_lidar(sample_idx)
+        points, num_sweeps = self.get_lidar(sample_idx)
         calib = self.get_calib(sample_idx)
 
         img_shape = info['image']['image_shape']
